@@ -1,0 +1,186 @@
+<?php
+
+namespace Model;
+
+class Flights extends \Model {
+
+    public static function allDest() {
+        $allDest = array('Haneda' => 'RJTT',
+                         'Narita' => 'RJAA',
+                         'Osaka(Itami)' => 'RJOO',
+                         'Osaka(Kansai)' => 'RJBB',
+                         'Nagoya' => 'RJNA',
+                         'Nagoya(Centrair)' => 'RJGG',
+                         'New Chitose' => 'RJCC',
+                         'Hiroshima' => 'RJOA',
+                         'Fukuoka' => 'RJFF',
+                         'Kitakyushu' => 'RJFR',
+                         // 'Naha' => 'ROAH',
+        ); // ICAO
+        return $allDest;
+    }
+
+    // flightradar24版
+    public static function getFlights($dest) {
+        // $threshold = date('Y-m-d H:i:s', strtotime('-20 min'));
+        // $data = \DB::query("SELECT * FROM flightdata WHERE (destination_iana = '".$dest."' OR origin_iana = '".$dest."') AND length < 1000 AND created > '".$threshold."' ORDER BY callsign, created ASC")
+        // // $data = \DB::query("SELECT * FROM flightdata WHERE origin_iana = '".$dest."' AND length < 1000 AND created > '".$threshold."' ORDER BY callsign, created ASC")
+        //       ->execute()->as_array();
+        // $result = array();
+        // foreach($data as $k => $v) {
+            
+        //     // if (($v[''] < 3) && ($dest == $v['origin_iana'])) {continue;}
+        //     // if (($v['length'] > 1000) && ($dest == $v['origin_iana'])) {continue;}
+        //     if (isset($result[$v['callsign']]) == true) {
+        //         // update
+        //         $result[$v['callsign']] = $v;
+        //     } else {
+        //         // new flight
+        //         $result[$v['callsign']] = $v;
+        //     }
+        // }
+        // // altitudeを最初のほうに持ってくる
+        // $res = usort($result, function($a, $b) {
+        //     if ($a['length'] == $b['length']) { return true; }
+        //     if ($a['length'] > $b['length']) { return true; }
+        //     if ($a['length'] < $b['length']) { return false; }
+        // });
+
+        // return $result;
+    }
+
+    // adsbexchange版
+    public static function getFlightsFromAdsb($dest) {
+        $threshold = date('Y-m-d H:i:s', strtotime('-20 min'));
+        // $data = \DB::query("SELECT * FROM adsb WHERE (destination_icao = '".$dest."' OR origin_icao = '".$dest."') AND created > '".$threshold."' ORDER BY callsign, created ASC")
+        $data = \DB::query("SELECT * FROM adsb WHERE destination_icao = '".$dest."' AND created > '".$threshold."' ORDER BY callsign, created ASC")
+              ->execute()->as_array();
+        $result = array();
+        foreach($data as $k => $v) {
+            if ($dest == $v['origin_icao']) { $v['flightLength'] = $v['length']; } // 出発地を指定した場合は、すでに飛んだ距離を使う
+            if ($dest == $v['destination_icao']) { $v['flightLength'] = $v['togo']; } // 到着地を指定した場合は、到着地までの距離を使う
+
+            if (($v['togo'] < 3) && ($dest == $v['origin_icao'])) {continue;}
+            $v['length'] = $v['flightLength'];
+            if ($v['length'] > 1000) {continue;}
+            // if (($v['length'] > 1000) && ($dest == $v['origin_icao'])) {continue;}
+
+            $tmp = trim(str_replace($v['origin_icao'], '', $v['origin']));
+            $no = strpos($tmp, ',');
+            $v['origin_name'] = substr($tmp, 0, $no);
+            $tmp = trim(str_replace($v['destination_icao'], '', $v['destination']));
+            $no = strpos($tmp, ',');
+            $v['destination_name'] = substr($tmp, 0, $no);
+
+            if (isset($result[$v['callsign']]) == true) {
+                // update
+                $result[$v['callsign']] = $v;
+            } else {
+                // new flight
+                $result[$v['callsign']] = $v;
+            }
+            
+        }
+        
+        // altitudeを最初のほうに持ってくる
+        $res = usort($result, function($a, $b) {
+            if ($a['flightLength'] == $b['flightLength']) { return true; }
+            if ($a['flightLength'] > $b['flightLength']) { return true; }
+            if ($a['flightLength'] < $b['flightLength']) { return false; }
+        });
+
+        return $result;
+    }
+
+    public static function getMilitary() {
+        $time = intval(time()/300);
+        $base = date('Y-m-d H:i', ($time * 300));
+        $time = \DB::query('SELECT max(created) as base FROM miscadsb LIMIT 1')
+              ->execute()->current();
+        // print_r($time);
+        $from = date('Y-m-d h:i:s', strtotime($time['base']) - 30);
+        $to = date('Y-m-d h:i:s', strtotime($time['base']) + 30);
+        
+        // $data = \DB::query('SELECT * FROM miscadsb WHERE data LIKE \'%Mil":true%\' AND created LIKE "'.$base.'%" ORDER BY data')
+        //       ->execute()->as_array();
+        $data = \DB::query('SELECT * FROM miscadsb WHERE created BETWEEN "'.$from.'" AND "'.$to.'" ORDER BY data ASC')
+              ->execute()->as_array();
+
+        $result = array();
+        
+        foreach($data as $k => $aircraft) {
+            $vehicle = (array)json_decode($aircraft['data']);
+
+            if ($vehicle['Mil'] == 1) {
+                if (isset($vehicle['Mdl'])) { $result[$k]['aircraft'] = $vehicle['Mdl']; }
+                else {$result[$k]['aircraft'] = null; }
+                if (isset($vehicle['Man'])) { $result[$k]['maker'] = $vehicle['Man']; }
+                else {$result[$k]['maker'] = null; }
+                if (isset($vehicle['Cou'])) { $result[$k]['country'] = $vehicle['Cou']; }
+                else {$result[$k]['country'] = null; }
+                if (isset($vehicle['Alt'])) { $result[$k]['altitude'] = $vehicle['Alt']; }
+                else {$result[$k]['altitude'] = null; }
+                if (isset($vehicle['Lat'])) { $result[$k]['latitude'] = $vehicle['Lat']; }
+                else {$result[$k]['latitude'] = null; }
+                if (isset($vehicle['Long'])) { $result[$k]['longitude'] = $vehicle['Long']; }
+                else {$result[$k]['longitude'] = null; }
+                if (isset($vehicle['Spd'])) { $result[$k]['speed'] = $vehicle['Spd']; }
+                else {$result[$k]['speed'] = null; }
+                if (isset($vehicle['Op'])) { $result[$k]['operator'] = $vehicle['Op']; }
+                else {$result[$k]['operator'] = null; }
+                if (isset($vehicle['Reg'])) { $result[$k]['registration'] = $vehicle['Reg']; }
+                else {$result[$k]['registration'] = null; }
+                if (isset($vehicle['From'])) { $result[$k]['from'] = $vehicle['From']; }
+                else {$result[$k]['from'] = null; }
+                if (isset($vehicle['To'])) { $result[$k]['to'] = $vehicle['To']; }
+                else {$result[$k]['to'] = null; }
+            }
+            
+        }
+
+        return $result;
+    }
+
+    // 空港マスター取得
+    public static function getAirports($country = 'Japan') {
+        $res = \DB::query('SELECT * FROM airports')->execute()->as_array();
+        // print_r($res);
+
+        $return = array();
+        foreach($res as $k => $v) {
+            $return[$v['icao']] = $v;
+        }
+
+        return $return;
+    }
+
+    // 航空機登録
+    public static function regist($data) {
+        \DB::insert('adsb')->set($data)->execute();
+        return true;
+    }
+
+    // その他登録
+    public static function registOther($data) {
+        \DB::insert('miscadsb')->set($data)->execute();
+        return true;
+    }
+
+    public static function icao2iana($icao) {
+        $data = \DB::query('SELECT * FROM airports WHERE icao = "'.$icao.'"')->execute()->as_array();
+    }
+
+    public static function cleanup($day) {
+        \DB::query('DELETE FROM adsb WHERE created < "'.date('Y-m-d', $day).' 00:00:00"')->execute();
+        \DB::query('DELETE FROM miscadsb WHERE created < "'.date('Y-m-d', $day).' 23:45:00"')->execute();
+    }
+
+    public static function deleteAirport() {
+        return \DB::query('TRUNCATE airports')->execute();
+    }
+    
+    public static function registAirport($data) {
+        \DB::insert('airports')->set($data)->execute();
+        return true;
+    }
+}
